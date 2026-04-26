@@ -1,0 +1,17 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+
+# Local dev
+node_modules/
+.env
+.env.local
+
+# Local credential overrides (defensive)
+index.local.html
+pricing.local.html
+debug.local.html

@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Widget Debug Console — Sonderlin Testbed</title>
+    <meta name="robots" content="noindex" />
+    <link rel="stylesheet" href="shared/styles.css" />
+  </head>
+  <body class="debug-page">
+    <div class="testbed-banner">
+      Testbed for Discrena widget — not a real product
+    </div>
+
+    <nav class="nav">
+      <div class="nav-inner">
+        <a href="index.html" class="nav-brand">Sonderlin</a>
+        <div class="nav-links">
+          <a href="index.html">Home</a>
+          <a href="pricing.html">Pricing</a>
+          <a href="debug.html" class="active">Debug</a>
+        </div>
+      </div>
+    </nav>
+
+    <main class="container">
+      <header>
+        <h1 style="margin: 0 0 0.5rem; font-size: 1.75rem; letter-spacing: -0.015em;">
+          Widget Debug Console
+        </h1>
+        <p style="color: var(--muted); margin: 0;">
+          Live inspection of the Discrena widget loaded on this page.
+        </p>
+      </header>
+
+      <div class="debug-grid">
+        <section class="debug-panel">
+          <h3>
+            Resolved widget config
+            <span class="label">from script tag</span>
+          </h3>
+          <pre id="config-output">Loading…</pre>
+        </section>
+
+        <section class="debug-panel">
+          <h3>
+            Window inspection
+            <span class="label">discrena-prefixed globals</span>
+          </h3>
+          <div class="debug-actions">
+            <button class="btn" id="inspect-window">Inspect window object</button>
+            <button class="btn btn-secondary" id="trigger-test">Trigger test event</button>
+          </div>
+          <pre id="inspect-output">Click a button above to inspect.</pre>
+        </section>
+
+        <section class="debug-panel">
+          <h3>
+            Network log
+            <span class="label">fetch &amp; XHR requests</span>
+          </h3>
+          <div class="debug-actions">
+            <button class="btn btn-secondary" id="clear-log">Clear log</button>
+          </div>
+          <pre id="network-log"><span class="log-line info">Network monitor active. Waiting for requests…</span></pre>
+        </section>
+      </div>
+    </main>
+
+    <footer class="footer">
+      Powered by
+      <a href="https://app.staging.discrena.io" target="_blank" rel="noopener"
+        >Discrena (Testbed)</a
+      >
+    </footer>
+
+    <script>
+      (function () {
+        const networkLog = document.getElementById('network-log');
+
+        function logLine(message, type) {
+          const line = document.createElement('span');
+          line.className = 'log-line ' + (type || '');
+          line.textContent = message;
+          networkLog.appendChild(line);
+          networkLog.scrollTop = networkLog.scrollHeight;
+        }
+
+        function timestamp() {
+          const d = new Date();
+          return d.toTimeString().slice(0, 8);
+        }
+
+        const originalFetch = window.fetch;
+        window.fetch = function (input, init) {
+          const url = typeof input === 'string' ? input : input.url;
+          const method = (init && init.method) || (input && input.method) || 'GET';
+          const startedAt = timestamp();
+          logLine('[' + startedAt + '] → ' + method + ' ' + url, 'info');
+
+          return originalFetch.apply(this, arguments).then(
+            function (response) {
+              const status = response.status;
+              const cssClass = status >= 200 && status < 400 ? 'success' : 'error';
+              logLine(
+                '[' + timestamp() + '] ← ' + status + ' ' + method + ' ' + url,
+                cssClass
+              );
+              return response;
+            },
+            function (error) {
+              logLine(
+                '[' + timestamp() + '] ✗ ' + method + ' ' + url + ' — ' + error.message,
+                'error'
+              );
+              throw error;
+            }
+          );
+        };
+
+        const OriginalXHR = window.XMLHttpRequest;
+        function PatchedXHR() {
+          const xhr = new OriginalXHR();
+          let xhrMethod = '';
+          let xhrUrl = '';
+          const originalOpen = xhr.open;
+          xhr.open = function (method, url) {
+            xhrMethod = method;
+            xhrUrl = url;
+            return originalOpen.apply(xhr, arguments);
+          };
+          const originalSend = xhr.send;
+          xhr.send = function () {
+            logLine('[' + timestamp() + '] → ' + xhrMethod + ' ' + xhrUrl + ' (xhr)', 'info');
+            xhr.addEventListener('loadend', function () {
+              const status = xhr.status;
+              const cssClass = status >= 200 && status < 400 ? 'success' : 'error';
+              logLine(
+                '[' + timestamp() + '] ← ' + status + ' ' + xhrMethod + ' ' + xhrUrl + ' (xhr)',
+                cssClass
+              );
+            });
+            return originalSend.apply(xhr, arguments);
+          };
+          return xhr;
+        }
+        window.XMLHttpRequest = PatchedXHR;
+
+        function readWidgetConfig() {
+          const tag = document.querySelector('script[src*="discrena"][src*="widget.js"]');
+          if (!tag) {
+            return { error: 'Widget script tag not found on this page.' };
+          }
+          const apiKeyAttr = tag.getAttribute('data-api-key');
+          return {
+            scriptSrc: tag.getAttribute('src'),
+            propertyId: tag.getAttribute('data-property-id'),
+            apiKey:
+              apiKeyAttr && apiKeyAttr !== 'REPLACE_WITH_API_KEY'
+                ? '****' + apiKeyAttr.slice(-4)
+                : apiKeyAttr,
+            baseUrl: tag.getAttribute('data-base-url'),
+          };
+        }
+
+        document.getElementById('config-output').textContent = JSON.stringify(
+          readWidgetConfig(),
+          null,
+          2
+        );
+
+        document
+          .getElementById('inspect-window')
+          .addEventListener('click', function () {
+            const found = {};
+            for (const key in window) {
+              if (key.toLowerCase().indexOf('discrena') !== -1) {
+                let value;
+                try {
+                  value = window[key];
+                  found[key] = typeof value === 'function' ? '[function]' : value;
+                } catch (err) {
+                  found[key] = '[unreadable: ' + err.message + ']';
+                }
+              }
+            }
+            const output =
+              Object.keys(found).length > 0
+                ? JSON.stringify(found, null, 2)
+                : 'No discrena-prefixed globals found on window.';
+            document.getElementById('inspect-output').textContent = output;
+            console.log('[debug] discrena globals:', found);
+          });
+
+        document
+          .getElementById('trigger-test')
+          .addEventListener('click', function () {
+            const candidates = ['discrena', 'DiscrenaWidget', '__discrena__', 'Discrena'];
+            let triggered = null;
+            for (const name of candidates) {
+              const api = window[name];
+              if (api && typeof api === 'object') {
+                triggered = name;
+                console.log('[debug] found public API at window.' + name, api);
+                if (typeof api.track === 'function') {
+                  api.track('debug_test_event', { source: 'debug.html' });
+                } else if (typeof api.event === 'function') {
+                  api.event('debug_test_event');
+                } else if (typeof api.identify === 'function') {
+                  api.identify({ source: 'debug.html' });
+                }
+                break;
+              }
+            }
+            if (!triggered) {
+              alert('Public API not detected — this is fine, the widget may not expose one.');
+            } else {
+              alert('Triggered test event via window.' + triggered + ' — see console for details.');
+            }
+          });
+
+        document.getElementById('clear-log').addEventListener('click', function () {
+          networkLog.textContent = '';
+          logLine('Network monitor active. Waiting for requests…', 'info');
+        });
+      })();
+    </script>
+
+    <script
+      src="https://cdn.staging.discrena.io/widget.js"
+      data-property-id="REPLACE_WITH_PROPERTY_ID"
+      data-api-key="REPLACE_WITH_API_KEY"
+      data-base-url="https://api.staging.discrena.io"
+    ></script>
+  </body>
+</html>
